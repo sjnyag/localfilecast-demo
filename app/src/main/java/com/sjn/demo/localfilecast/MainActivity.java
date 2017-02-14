@@ -12,6 +12,15 @@ import android.provider.MediaStore;
 import android.support.v4.app.ActivityCompat;
 import android.support.v4.media.MediaMetadataCompat;
 import android.support.v7.app.AppCompatActivity;
+import android.view.Menu;
+import android.view.MenuItem;
+
+import com.google.android.gms.cast.MediaInfo;
+import com.google.android.gms.cast.MediaMetadata;
+import com.google.android.gms.cast.framework.CastButtonFactory;
+import com.google.android.gms.cast.framework.CastContext;
+import com.google.android.gms.cast.framework.CastSession;
+import com.google.android.gms.common.images.WebImage;
 
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
@@ -39,6 +48,28 @@ public class MainActivity extends AppCompatActivity {
         if (mHttpServer != null && mHttpServer.isAlive()) {
             mHttpServer.stop();
         }
+    }
+
+    @Override
+    public boolean onCreateOptionsMenu(Menu menu) {
+        super.onCreateOptionsMenu(menu);
+        getMenuInflater().inflate(R.menu.main, menu);
+        try {
+            CastButtonFactory.setUpMediaRouteButton(getApplicationContext(),
+                    menu, R.id.media_route_menu_item);
+        } catch (RuntimeException e) {
+            e.printStackTrace();
+        }
+        return true;
+    }
+
+    @Override
+    public boolean onOptionsItemSelected(MenuItem item) {
+        if (item != null && item.getItemId() == R.id.play) {
+            startCast();
+            return true;
+        }
+        return super.onOptionsItemSelected(item);
     }
 
     private class HttpServer extends NanoHTTPD {
@@ -69,7 +100,7 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private void startServer() {
+    private void startCast() {
         String ip = getWifiAddress();
         if (mHttpServer == null || !mHttpServer.isAlive()) {
             try {
@@ -81,6 +112,7 @@ public class MainActivity extends AppCompatActivity {
         }
         MediaMetadataCompat media = fetchMedia();
         mHttpServer.setMedia(media);
+        play("http://" + ip + ":" + mHttpServer.mPort, media);
     }
 
     private void checkPermissions() {
@@ -152,4 +184,43 @@ public class MainActivity extends AppCompatActivity {
                         ContentUris.withAppendedId(Uri.parse("content://media/external/audio/albumart"), cursor.getLong(5)).toString())
                 .build();
     }
+
+    void play(String url, MediaMetadataCompat track) {
+        CastSession castSession = CastContext.getSharedInstance(getApplicationContext()).getSessionManager()
+                .getCurrentCastSession();
+        if (castSession != null) {
+            MediaInfo media = toCastMediaMetadata(url, track);
+            castSession.getRemoteMediaClient().load(media);
+        }
+    }
+
+    private MediaInfo toCastMediaMetadata(String url, MediaMetadataCompat track) {
+        MediaMetadata mediaMetadata = new MediaMetadata(MediaMetadata.MEDIA_TYPE_MUSIC_TRACK);
+        mediaMetadata.putString(MediaMetadata.KEY_TITLE,
+                track.getDescription().getTitle() == null ? "" :
+                        track.getDescription().getTitle().toString());
+        mediaMetadata.putString(MediaMetadata.KEY_SUBTITLE,
+                track.getDescription().getSubtitle() == null ? "" :
+                        track.getDescription().getSubtitle().toString());
+        mediaMetadata.putString(MediaMetadata.KEY_ALBUM_ARTIST,
+                track.getString(MediaMetadataCompat.METADATA_KEY_ARTIST));
+        mediaMetadata.putString(MediaMetadata.KEY_ALBUM_TITLE,
+                track.getString(MediaMetadataCompat.METADATA_KEY_ALBUM));
+        WebImage image = new WebImage(
+                new Uri.Builder().encodedPath(
+                        track.getString(MediaMetadataCompat.METADATA_KEY_ALBUM_ART_URI))
+                        .build());
+        // First image is used by the receiver for showing the audio album art.
+        mediaMetadata.addImage(image);
+        // Second image is used by Cast Companion Library on the full screen activity that is shown
+        // when the cast dialog is clicked.
+        mediaMetadata.addImage(image);
+
+        return new MediaInfo.Builder(url)
+                .setContentType("audio/mpeg")
+                .setStreamType(MediaInfo.STREAM_TYPE_BUFFERED)
+                .setMetadata(mediaMetadata)
+                .build();
+    }
+
 }
