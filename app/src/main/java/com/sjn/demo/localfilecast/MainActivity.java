@@ -20,16 +20,22 @@ import com.google.android.gms.cast.MediaMetadata;
 import com.google.android.gms.cast.framework.CastButtonFactory;
 import com.google.android.gms.cast.framework.CastContext;
 import com.google.android.gms.cast.framework.CastSession;
+import com.google.android.gms.cast.framework.media.RemoteMediaClient;
 import com.google.android.gms.common.images.WebImage;
 
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 
 import fi.iki.elonen.NanoHTTPD;
 
+import static fi.iki.elonen.NanoHTTPD.Response.Status.NOT_FOUND;
 import static fi.iki.elonen.NanoHTTPD.Response.Status.OK;
 
 public class MainActivity extends AppCompatActivity {
@@ -66,14 +72,24 @@ public class MainActivity extends AppCompatActivity {
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
         if (item != null && item.getItemId() == R.id.play) {
-            startCast();
+            List<MediaMetadataCompat> mediaList = fetchMedia();
+            if (mediaList == null || mediaList.isEmpty()) {
+                return true;
+            }
+            Collections.shuffle(mediaList);
+            if (mHttpServer == null || !mHttpServer.isAlive()) {
+                startSever();
+            }
+            String url = "http://" + getWifiAddress() + ":" + mHttpServer.mPort;
+            mHttpServer.setMedia(mediaList.get(0));
+            castMedia(url, mediaList.get(0));
             return true;
         }
         return super.onOptionsItemSelected(item);
     }
 
     private class HttpServer extends NanoHTTPD {
-        int mPort;
+        final int mPort;
         MediaMetadataCompat mMedia;
 
         HttpServer(int port) throws IOException {
@@ -87,44 +103,52 @@ public class MainActivity extends AppCompatActivity {
 
         @Override
         public Response serve(IHTTPSession session) {
-            FileInputStream stream = null;
             if (mMedia == null) {
-                return new Response("No music");
+                return new Response(NOT_FOUND, MIME_PLAINTEXT, "No music");
             }
+            if (session.getUri().contains("image")) {
+                return serveImage();
+            } else {
+                return serveMusic();
+            }
+        }
+
+        private Response serveMusic() {
+            InputStream stream = null;
             try {
-                stream = new FileInputStream(mMedia.getString(MediaMetadataCompat.METADATA_KEY_MEDIA_URI));
+                stream = new FileInputStream(
+                        mMedia.getString(MediaMetadataCompat.METADATA_KEY_MEDIA_URI));
             } catch (FileNotFoundException e) {
                 e.printStackTrace();
             }
             return new Response(OK, "audio/mp3", stream);
         }
-    }
 
-    private void startCast() {
-        String ip = getWifiAddress();
-        if (mHttpServer == null || !mHttpServer.isAlive()) {
+        private Response serveImage() {
+            InputStream stream = null;
             try {
-                mHttpServer = new HttpServer(findOpenPort(ip, 8080));
-                mHttpServer.start();
-            } catch (IOException e) {
+                stream = getContentResolver().openInputStream(Uri.parse(
+                        mMedia.getString(MediaMetadataCompat.METADATA_KEY_ALBUM_ART_URI)));
+            } catch (FileNotFoundException e) {
                 e.printStackTrace();
             }
+            return new Response(OK, "image/jpeg", stream);
         }
-        MediaMetadataCompat media = fetchMedia();
-        mHttpServer.setMedia(media);
-        play("http://" + ip + ":" + mHttpServer.mPort, media);
     }
 
-    private void checkPermissions() {
-        if (Build.VERSION.SDK_INT >= 23) {
-            ActivityCompat.requestPermissions(this, new String[]{
-                    Manifest.permission.READ_EXTERNAL_STORAGE,
-                    Manifest.permission.WRITE_EXTERNAL_STORAGE}, 1);
+    private void startSever() {
+        try {
+            String ip = getWifiAddress();
+            int port = findOpenPort(ip, 8080);
+            mHttpServer = new HttpServer(port);
+            mHttpServer.start();
+        } catch (IOException e) {
+            e.printStackTrace();
         }
     }
 
     private String getWifiAddress() {
-        WifiManager wifiManager = (WifiManager) getSystemService(WIFI_SERVICE);
+        WifiManager wifiManager = (WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
         WifiInfo wifiInfo = wifiManager.getConnectionInfo();
         int ipAddress = wifiInfo.getIpAddress();
         return ((ipAddress) & 0xFF) + "." +
@@ -154,8 +178,15 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private MediaMetadataCompat fetchMedia() {
-        MediaMetadataCompat media = null;
+    private void checkPermissions() {
+        if (Build.VERSION.SDK_INT >= 23) {
+            ActivityCompat.requestPermissions(this, new String[]{
+                    Manifest.permission.READ_EXTERNAL_STORAGE}, 1);
+        }
+    }
+
+    private List<MediaMetadataCompat> fetchMedia() {
+        List<MediaMetadataCompat> mediaList = new ArrayList<>();
         Cursor mediaCursor = getContentResolver().query(
                 MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
                 new String[]{
@@ -167,10 +198,12 @@ public class MainActivity extends AppCompatActivity {
                         MediaStore.Audio.Media.ALBUM_ID},
                 MediaStore.Audio.Media.IS_MUSIC + " != 0", null, null);
         if (mediaCursor != null && mediaCursor.moveToFirst()) {
-            media = buildMediaMetadataCompat(mediaCursor);
+            do {
+                mediaList.add(buildMediaMetadataCompat(mediaCursor));
+            } while (mediaCursor.moveToNext());
             mediaCursor.close();
         }
-        return media;
+        return mediaList;
     }
 
     private MediaMetadataCompat buildMediaMetadataCompat(Cursor cursor) {
@@ -181,16 +214,24 @@ public class MainActivity extends AppCompatActivity {
                 .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, cursor.getString(3))
                 .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, cursor.getString(4))
                 .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ART_URI,
-                        ContentUris.withAppendedId(Uri.parse("content://media/external/audio/albumart"), cursor.getLong(5)).toString())
+                        getAlbumArtUri(cursor.getLong(5)).toString())
                 .build();
     }
 
-    void play(String url, MediaMetadataCompat track) {
+    private Uri getAlbumArtUri(long albumId) {
+        Uri albumArtUri = Uri.parse("content://media/external/audio/albumart");
+        return ContentUris.withAppendedId(albumArtUri, albumId);
+    }
+
+    void castMedia(String url, MediaMetadataCompat track) {
         CastSession castSession = CastContext.getSharedInstance(getApplicationContext()).getSessionManager()
                 .getCurrentCastSession();
         if (castSession != null) {
             MediaInfo media = toCastMediaMetadata(url, track);
-            castSession.getRemoteMediaClient().load(media);
+            RemoteMediaClient remoteMediaClient = castSession.getRemoteMediaClient();
+            if (remoteMediaClient != null) {
+                remoteMediaClient.load(media);
+            }
         }
     }
 
@@ -207,9 +248,7 @@ public class MainActivity extends AppCompatActivity {
         mediaMetadata.putString(MediaMetadata.KEY_ALBUM_TITLE,
                 track.getString(MediaMetadataCompat.METADATA_KEY_ALBUM));
         WebImage image = new WebImage(
-                new Uri.Builder().encodedPath(
-                        track.getString(MediaMetadataCompat.METADATA_KEY_ALBUM_ART_URI))
-                        .build());
+                new Uri.Builder().encodedPath(url + "/image").build());
         // First image is used by the receiver for showing the audio album art.
         mediaMetadata.addImage(image);
         // Second image is used by Cast Companion Library on the full screen activity that is shown
