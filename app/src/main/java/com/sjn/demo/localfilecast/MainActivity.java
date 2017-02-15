@@ -27,9 +27,7 @@ import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.InetSocketAddress;
 import java.net.ServerSocket;
-import java.net.Socket;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -139,8 +137,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void startSever() {
         try {
-            String ip = getWifiAddress();
-            int port = findOpenPort(ip, 8080);
+            int port = findOpenPort();
             mHttpServer = new HttpServer(port);
             mHttpServer.start();
         } catch (IOException e) {
@@ -158,7 +155,7 @@ public class MainActivity extends AppCompatActivity {
                 ((ipAddress >> 24) & 0xFF);
     }
 
-    private int findOpenPort(String ip, int startPort) {
+    private int findOpenPort() {
         ServerSocket socket;
         try {
             socket = new ServerSocket(0);
@@ -166,17 +163,6 @@ public class MainActivity extends AppCompatActivity {
             return socket.getLocalPort();
         } catch (IOException e) {
             throw new RuntimeException("There is no open port.");
-        }
-    }
-
-    private boolean isPortAvailable(String ip, int port, int timeout) {
-        try {
-            Socket socket = new Socket();
-            socket.connect(new InetSocketAddress(ip, port), timeout);
-            socket.close();
-            return false;
-        } catch (Exception e) {
-            return true;
         }
     }
 
