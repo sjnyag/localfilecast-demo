@@ -28,6 +28,7 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.InetSocketAddress;
+import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -158,13 +159,14 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private int findOpenPort(String ip, int startPort) {
-        final int timeout = 200;
-        for (int port = startPort; port <= 65535; port++) {
-            if (isPortAvailable(ip, port, timeout)) {
-                return port;
-            }
+        ServerSocket socket;
+        try {
+            socket = new ServerSocket(0);
+            socket.setReuseAddress(true);
+            return socket.getLocalPort();
+        } catch (IOException e) {
+            throw new RuntimeException("There is no open port.");
         }
-        throw new RuntimeException("There is no open port.");
     }
 
     private boolean isPortAvailable(String ip, int port, int timeout) {
